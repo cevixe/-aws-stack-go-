@@ -1,0 +1,136 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Description: Cevixe Stack - Store
+
+Parameters:
+  ApplicationName:
+    Type: String
+    MaxLength: 120
+    Description: cevixe application name
+
+Resources:
+  EventBus:
+    Type: AWS::SNS::Topic
+  ObjectStore:
+    Type: AWS::S3::Bucket
+  EventStore:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: source_key
+          AttributeType: S
+        - AttributeName: event_id
+          AttributeType: N
+        - AttributeName: transaction
+          AttributeType: S
+        - AttributeName: event_time
+          AttributeType: N
+      KeySchema:
+        - AttributeName: source_key
+          KeyType: HASH
+        - AttributeName: event_id
+          KeyType: RANGE
+      StreamSpecification:
+        StreamViewType: NEW_IMAGE
+      GlobalSecondaryIndexes:
+        - IndexName: transaction-time-index
+          Projection:
+            ProjectionType: ALL
+          KeySchema:
+            - AttributeName: transaction
+              KeyType: HASH
+            - AttributeName: event_time
+              KeyType: RANGE
+  StateStore:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: type
+          AttributeType: S
+        - AttributeName: id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: type
+          KeyType: HASH
+        - AttributeName: id
+          KeyType: RANGE
+
+Outputs:
+  EventBusArn:
+    Value: !Ref EventBus
+    Export:
+      Name:
+        Fn::Join:
+          - "-"
+          - - !Ref ApplicationName
+            - 'EventBusArn'
+  EventBusName:
+    Value: !GetAtt EventBus.TopicName
+    Export:
+      Name:
+        Fn::Join:
+          - "-"
+          - - !Ref ApplicationName
+            - 'EventBusName'
+
+  ObjectStoreArn:
+    Value: !GetAtt ObjectStore.Arn
+    Export:
+      Name:
+        Fn::Join:
+          - "-"
+          - - !Ref ApplicationName
+            - 'ObjectStoreArn'
+  ObjectStoreName:
+    Value: !Ref ObjectStore
+    Export:
+      Name:
+        Fn::Join:
+          - "-"
+          - - !Ref ApplicationName
+            - 'ObjectStoreName'
+
+  EventStoreArn:
+    Value: !GetAtt EventStore.Arn
+    Export:
+      Name:
+        Fn::Join:
+          - "-"
+          - - !Ref ApplicationName
+            - 'EventStoreArn'
+  EventStoreName:
+    Value: !Ref EventStore
+    Export:
+      Name:
+        Fn::Join:
+          - "-"
+          - - !Ref ApplicationName
+            - 'EventStoreName'
+  EventStoreStream:
+    Value: !GetAtt EventStore.StreamArn
+    Export:
+      Name:
+        Fn::Join:
+          - "-"
+          - - !Ref ApplicationName
+            - 'EventStoreStream'
+
+  StateStoreArn:
+    Value: !GetAtt StateStore.Arn
+    Export:
+      Name:
+        Fn::Join:
+          - "-"
+          - - !Ref ApplicationName
+            - 'StateStoreArn'
+  StateStoreName:
+    Value: !Ref StateStore
+    Export:
+      Name:
+        Fn::Join:
+          - "-"
+          - - !Ref ApplicationName
+            - 'StateStoreName'
+

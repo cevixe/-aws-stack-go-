@@ -1,0 +1,669 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Description: Cevixe Stack - GraphQL Api
+
+Parameters:
+  ApplicationName:
+    Type: String
+    MaxLength: 120
+    Description: cevixe application name
+
+Resources:
+  eventStoreAppSyncServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - appsync.amazonaws.com
+            Action:
+              - sts:AssumeRole
+  eventStoreDynamodbAccessPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName:
+        Fn::Join:
+          - "-"
+          - - !Ref ApplicationName
+            - 'EventStoreDynamodbAccessPolicy'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - "dynamodb:Query"
+              - "dynamodb:GetItem"
+              - "dynamodb:PutItem"
+            Resource:
+              - Fn::Join:
+                  - "/"
+                  - - Fn::ImportValue:
+                        Fn::Join:
+                          - "-"
+                          - - !Ref ApplicationName
+                            - 'EventStoreArn'
+                    - "*"
+      Roles:
+        - Ref: stateStoreAppSyncServiceRole
+
+  stateStoreAppSyncServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - appsync.amazonaws.com
+            Action:
+              - sts:AssumeRole
+  stateStoreDynamodbAccessPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName:
+        Fn::Join:
+          - "-"
+          - - !Ref ApplicationName
+            - 'StateStoreDynamodbAccessPolicy'
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action:
+              - "dynamodb:Query"
+              - "dynamodb:GetItem"
+            Resource:
+              - Fn::Join:
+                  - "/"
+                  - - Fn::ImportValue:
+                        Fn::Join:
+                          - "-"
+                          - - !Ref ApplicationName
+                            - 'StateStoreArn'
+                    - "*"
+      Roles:
+        - Ref: stateStoreAppSyncServiceRole
+
+  GraphqlApi:
+    Type: AWS::AppSync::GraphQLApi
+    Properties:
+      Name: CevixeGraphqlApi
+      AuthenticationType: API_KEY
+      AdditionalAuthenticationProviders:
+        - AuthenticationType: AWS_IAM
+  GraphqlApiKey:
+    Type: AWS::AppSync::ApiKey
+    Properties:
+      ApiId: !GetAtt GraphqlApi.ApiId
+
+  EventStoreDataSource:
+    Type: AWS::AppSync::DataSource
+    Properties:
+      ApiId: !GetAtt GraphqlApi.ApiId
+      Name:
+        Fn::Join:
+          - "_"
+          - - !Join [ '_', !Split [ '-', !Ref ApplicationName ] ]
+            - 'EventStoreDataSource'
+      Type: AMAZON_DYNAMODB
+      ServiceRoleArn: !GetAtt eventStoreAppSyncServiceRole.Arn
+      DynamoDBConfig:
+        AwsRegion: !Ref "AWS::Region"
+        TableName:
+          Fn::ImportValue:
+            Fn::Join:
+              - "-"
+              - - !Ref ApplicationName
+                - 'EventStoreName'
+        UseCallerCredentials: false
+        Versioned: false
+  StateStoreDataSource:
+    Type: AWS::AppSync::DataSource
+    Properties:
+      ApiId: !GetAtt GraphqlApi.ApiId
+      Name:
+        Fn::Join:
+          - "_"
+          - - !Join [ '_', !Split [ '-', !Ref ApplicationName ] ]
+            - 'StateStoreDataSource'
+      Type: AMAZON_DYNAMODB
+      ServiceRoleArn: !GetAtt stateStoreAppSyncServiceRole.Arn
+      DynamoDBConfig:
+        AwsRegion: !Ref "AWS::Region"
+        TableName:
+          Fn::ImportValue:
+            Fn::Join:
+              - "-"
+              - - !Ref ApplicationName
+                - 'StateStoreName'
+        UseCallerCredentials: false
+        Versioned: true
+  MockDataSource:
+    Type: AWS::AppSync::DataSource
+    Properties:
+      ApiId: !GetAtt GraphqlApi.ApiId
+      Name:
+        Fn::Join:
+          - "_"
+          - - !Join [ '_', !Split [ '-', !Ref ApplicationName ] ]
+            - 'MockDataSource'
+      Type: NONE
+
+  CommandFn:
+    Type: AWS::AppSync::FunctionConfiguration
+    Properties:
+      ApiId: !GetAtt GraphqlApi.ApiId
+      DataSourceName: !GetAtt EventStoreDataSource.Name
+      FunctionVersion: 2018-05-29
+      Name: 'CevixeCommandFn'
+      RequestMappingTemplate: |
+        $util.qr( $util.validate( !$util.isNullOrBlank($ctx.stash.type), "command type not specified" ) )
+        $util.qr( $util.validate( (!$util.isNull($ctx.stash.payload) || !$util.isNull($ctx.stash.ref)), "command payload or ref not specified" ) )
+
+        #set( $sourceId = $util.autoId() )
+        #set( $sourceType = $ctx.stash.type )
+        #set( $sourceKey = "/$sourceType/$sourceId" )
+
+        #set( $eventSuffix = "Created" )
+        #set( $eventId = 1 )
+        #set( $eventType = "$sourceType$eventSuffix" )
+        #set( $eventTime = $util.time.nowEpochMilliSeconds() )
+        #if( $util.isNull($ctx.stash.ref) )
+          #set( $eventPayload = $ctx.stash.payload )
+        #else
+          #set( $ref = $ctx.stash.ref )
+        #end
+        #set( $eventAuthor = $util.defaultIfNullOrBlank($context.identity.username, "Unknown") )
+
+        #set( $tracingHeader = $context.request.headers["x-amzn-trace-id"] )
+        #set( $transaction = $util.defaultIfNullOrBlank($tracingHeader.replaceAll("Root=", ""), $util.autoId()) )
+
+        $util.qr( $ctx.stash.put("transaction", $transaction) )
+        $util.qr( $ctx.stash.put("commandType", $sourceType) )
+        $util.qr( $ctx.stash.put("commandId", $sourceId) )
+        $util.qr( $ctx.stash.put("eventType", $eventType) )
+        $util.qr( $ctx.stash.put("eventId", $eventId) )
+
+        {
+          "version" : "2018-05-29",
+          "operation" : "PutItem",
+          "key" : {
+            "source_key": $util.dynamodb.toDynamoDBJson($sourceKey),
+            "event_id": $util.dynamodb.toDynamoDBJson($eventId)
+          },
+          "attributeValues": {
+            "_ref": $util.dynamodb.toDynamoDBJson($ref),
+            "event_type": $util.dynamodb.toDynamoDBJson($eventType),
+            "event_time": $util.dynamodb.toDynamoDBJson($eventTime),
+            "event_author": $util.dynamodb.toDynamoDBJson($eventAuthor),
+            "event_payload": $util.dynamodb.toDynamoDBJson($eventPayload),
+            "source_id": $util.dynamodb.toDynamoDBJson($sourceId),
+            "source_type": $util.dynamodb.toDynamoDBJson($sourceType),
+            "source_time": $util.dynamodb.toDynamoDBJson($eventTime),
+            "source_owner": $util.dynamodb.toDynamoDBJson($eventAuthor),
+            "transaction": $util.dynamodb.toDynamoDBJson($transaction)
+          }
+        }
+      ResponseMappingTemplate: |
+        {
+          "id": $ctx.stash.sourceId,
+          "type": $ctx.stash.sourceType,
+          "transaction": $ctx.stash.transaction
+        }
+  PublishMessageFn:
+    Type: AWS::AppSync::FunctionConfiguration
+    Properties:
+      ApiId: !GetAtt GraphqlApi.ApiId
+      DataSourceName: !GetAtt MockDataSource.Name
+      FunctionVersion: 2018-05-29
+      Name: 'CevixePublishMessageFn'
+      RequestMappingTemplate: |
+        {
+            "version": "2018-05-29",
+            "payload": $util.toJson($ctx.stash.message)
+        }
+      ResponseMappingTemplate: |
+        $util.toJson($ctx.result)
+  MessageFn:
+    Type: AWS::AppSync::FunctionConfiguration
+    Properties:
+      ApiId: !GetAtt GraphqlApi.ApiId
+      DataSourceName: !GetAtt EventStoreDataSource.Name
+      FunctionVersion: 2018-05-29
+      Name: 'CevixeMessageFn'
+      RequestMappingTemplate: |
+        #set($Integer = 0)
+        $util.qr( $util.validate( !$util.isNullOrBlank($ctx.stash.entityType), "entity type not specified" ) )
+        $util.qr( $util.validate( !$util.isNullOrBlank($ctx.stash.entityId), "entity id not specified" ) )
+        $util.qr( $util.validate( $util.isNumber($ctx.stash.eventId), "event id not specified" ) )
+        {
+            "version" : "2017-02-28",
+            "operation" : "GetItem",
+            "key" : {
+                "source_key": $util.dynamodb.toDynamoDBJson("/$ctx.stash.entityType/$ctx.stash.entityId")
+                "event_id" : $util.dynamodb.toDynamoDBJson($Integer.parseInt("$ctx.stash.eventId"))
+            }
+        }
+      ResponseMappingTemplate: |
+        #if( !$util.isNull($ctx.result) )
+          #set( $item = $ctx.result )
+          #if( !$util.isNull($item._ref) )
+            #set( $ref =  $util.parseJson($item._ref) )
+          #end
+          #set( $event = $util.defaultIfNull($item.event_payload, {}) )
+          $util.qr( $event.put("__typename", $item.event_type) )
+          $util.qr( $event.put("_id", $item.event_id) )
+          $util.qr( $event.put("_type", $item.event_type) )
+          $util.qr( $event.put("_time", $util.time.epochMilliSecondsToISO8601($item.event_time)) )
+          $util.qr( $event.put("_author", $item.event_author) )
+          $util.qr( $event.put("_sourceId", $item.source_id) )
+          $util.qr( $event.put("_sourceType", $item.source_type) )
+          $util.qr( $event.put("_sourceVersion", $item.event_id) )
+          $util.qr( $event.put("_transaction", $item.transaction) )
+          #set( $entity = $util.defaultIfNull($item.source_state, {}) )
+          $util.qr( $entity.put("__typename", $item.source_type) )
+          $util.qr( $entity.put("_id", $item.source_id) )
+          $util.qr( $entity.put("_type", $item.source_type) )
+          $util.qr( $entity.put("_version", $item.event_id) )
+          $util.qr( $entity.put("_updatedAt", $util.time.epochMilliSecondsToISO8601($item.event_time)) )
+          $util.qr( $entity.put("_updatedBy", $item.event_author) )
+          $util.qr( $entity.put("_createdAt", $util.time.epochMilliSecondsToISO8601($item.source_time)) )
+          $util.qr( $entity.put("_createdBy", $item.source_owner) )
+          {
+            "transaction": $item.transaction,
+            "eventType": $item.event_type,
+            "eventAuthor": $item.event_author,
+            "entityId": $item.source_id,
+            "entityType": $item.source_type,
+            "entityOwner": $item.source_owner,
+            "event": $event,
+            "entity": $entity,
+            "_ref": $ref
+          }
+        #else
+          null
+        #end
+  MessageEntityFn:
+    Type: AWS::AppSync::FunctionConfiguration
+    Properties:
+      ApiId: !GetAtt GraphqlApi.ApiId
+      DataSourceName: !GetAtt MockDataSource.Name
+      FunctionVersion: 2018-05-29
+      Name: 'CevixeMessageEntityFn'
+      RequestMappingTemplate: |
+        {
+            "version": "2018-05-29",
+            "payload": $util.toJson($ctx.stash.message.entity)
+        }
+      ResponseMappingTemplate: |
+        $util.toJson($ctx.result)
+  MessageEventFn:
+    Type: AWS::AppSync::FunctionConfiguration
+    Properties:
+      ApiId: !GetAtt GraphqlApi.ApiId
+      DataSourceName: !GetAtt MockDataSource.Name
+      FunctionVersion: 2018-05-29
+      Name: 'CevixeMessageEventFn'
+      RequestMappingTemplate: |
+        {
+            "version": "2018-05-29",
+            "payload": $util.toJson($ctx.stash.message.event)
+        }
+      ResponseMappingTemplate: |
+        $util.toJson($ctx.result)
+  EntityMessagesFn:
+    Type: AWS::AppSync::FunctionConfiguration
+    Properties:
+      ApiId: !GetAtt GraphqlApi.ApiId
+      DataSourceName: !GetAtt EventStoreDataSource.Name
+      FunctionVersion: 2018-05-29
+      Name: 'CevixeEntityMessagesFn'
+      RequestMappingTemplate: |
+        $util.qr( $util.validate( !$util.isNullOrBlank($ctx.stash.type), "entity type not specified" ) )
+        $util.qr( $util.validate( !$util.isNullOrBlank($ctx.stash.id), "entity id not specified" ) )
+        {
+            "version" : "2017-02-28",
+            "operation" : "Query",
+            "query" : {
+              "expression": "source = :source",
+              "expressionValues" : {
+                ":source" : $util.dynamodb.toDynamoDBJson("/$ctx.stash.type/$ctx.stash.id")
+              }
+            },
+            "limit": $util.defaultIfNull(${ctx.stash.limit}, 20),
+            "nextToken": $util.toJson($util.defaultIfNullOrBlank($ctx.stash.nextToken, null))
+        }
+      ResponseMappingTemplate: |
+        #set( $result = [] )
+        #foreach( $item in $context.result.items  )
+          #if( !$util.isNull($item._ref) )
+            #set( $ref =  $util.parseJson($item._ref) )
+          #end
+          #set( $event = $util.defaultIfNull($item.event_payload, {}) )
+          $util.qr( $event.put("__typename", $item.event_type) )
+          $util.qr( $event.put("_id", $item.event_id) )
+          $util.qr( $event.put("_type", $item.event_type) )
+          $util.qr( $event.put("_time", $util.time.epochMilliSecondsToISO8601($item.event_time)) )
+          $util.qr( $event.put("_author", $item.event_author) )
+          $util.qr( $event.put("_sourceId", $item.source_id) )
+          $util.qr( $event.put("_sourceType", $item.source_type) )
+          $util.qr( $event.put("_sourceVersion", $item.event_id) )
+          $util.qr( $event.put("_transaction", $item.transaction) )
+          #set( $entity = $util.defaultIfNull($item.source_state, {}) )
+          $util.qr( $entity.put("__typename", $item.source_type) )
+          $util.qr( $entity.put("_id", $item.source_id) )
+          $util.qr( $entity.put("_type", $item.source_type) )
+          $util.qr( $entity.put("_version", $item.event_id) )
+          $util.qr( $entity.put("_updatedAt", $util.time.epochMilliSecondsToISO8601($item.event_time)) )
+          $util.qr( $entity.put("_updatedBy", $item.event_author) )
+          $util.qr( $entity.put("_createdAt", $util.time.epochMilliSecondsToISO8601($item.source_time)) )
+          $util.qr( $entity.put("_createdBy", $item.source_owner) )
+          $util.qr($result.add({
+            "transaction": $item.transaction,
+            "eventType": $item.event_type,
+            "eventAuthor": $item.event_author,
+            "entityId": $item.source_id,
+            "entityType": $item.source_type,
+            "entityOwner": $item.source_owner,
+            "event": $event,
+            "entity": $entity,
+            "_ref": $ref
+          }))
+        #end
+        {
+          "items": $util.toJson($result),
+          "nextToken": $util.toJson($util.defaultIfNullOrBlank($context.result.nextToken, null))
+        }
+
+  EntitiesFn:
+    Type: AWS::AppSync::FunctionConfiguration
+    Properties:
+      ApiId: !GetAtt GraphqlApi.ApiId
+      DataSourceName: !GetAtt StateStoreDataSource.Name
+      FunctionVersion: 2018-05-29
+      Name: 'CevixeEntitiesFn'
+      RequestMappingTemplate: |
+        $util.qr( $util.validate( $util.isNullOrBlank($ctx.stash.type), "entity type not specified" ) )
+        {
+          "version" : "2017-02-28",
+          "operation" : "Query",
+          "query" : {
+            "expression": "type = :type",
+            "expressionValues" : {
+              ":type" : $util.dynamodb.toDynamoDBJson("$ctx.stash.type")
+            }
+          },
+          "limit": $util.defaultIfNull(${ctx.stash.limit}, 20),
+          "nextToken": $util.toJson($util.defaultIfNullOrBlank($ctx.stash.nextToken, null))
+        }
+      ResponseMappingTemplate: |
+        #set( $result = [] )
+        #foreach( $item in $context.result.items  )
+          #if( !$util.isNull($item._ref) )
+            #set( $ref =  $util.parseJson($item._ref) )
+          #end
+          #set( $entity = $util.defaultIfNull($item.payload, {}) )
+          $util.qr( $entity.put("__typename", $item.type) )
+          $util.qr( $entity.put("_id", $item.id) )
+          $util.qr( $entity.put("_type", $item.type) )
+          $util.qr( $entity.put("_version", $item.version) )
+          $util.qr( $entity.put("_updatedAt", $util.time.epochMilliSecondsToISO8601($item.updated_at)) )
+          $util.qr( $entity.put("_updatedBy", $item.updated_by) )
+          $util.qr( $entity.put("_createdAt", $util.time.epochMilliSecondsToISO8601($item.created_at)) )
+          $util.qr( $entity.put("_createdBy", $item.created_by) )
+          $util.qr($result.add($entity))
+        #end
+        {
+          "items": $util.toJson($result),
+          "nextToken": $util.toJson($util.defaultIfNullOrBlank($context.result.nextToken, null))
+        }
+
+  EntityFn:
+    Type: AWS::AppSync::FunctionConfiguration
+    Properties:
+      ApiId: !GetAtt GraphqlApi.ApiId
+      DataSourceName: !GetAtt EventStoreDataSource.Name
+      FunctionVersion: 2018-05-29
+      Name: 'CevixeEntityFn'
+      RequestMappingTemplate: |
+        $util.qr( $util.validate( $util.isNullOrBlank($ctx.stash.type), "entity type not specified" ) )
+        $util.qr( $util.validate( $util.isNullOrBlank($ctx.stash.id), "entity id not specified" ) )
+        {
+          "version" : "2017-02-28",
+          "operation" : "Query",
+          "limit" : 1,
+          "scanIndexForward" : false,
+          "query" : {
+            "expression": "source_key = :source_key",
+            "expressionValues" : {
+              ":source_key" : $util.dynamodb.toDynamoDBJson("/$ctx.stash.type/$ctx.stash.id")
+            }
+          }
+        }
+      ResponseMappingTemplate: |
+        #if( $ctx.result.items.size() > 0 )
+          #set( $item = $ctx.result.items[0] )
+          #if( !$util.isNull($item._ref) )
+            #set( $ref =  $util.parseJson($item._ref) )
+          #end
+          #set( $entity = $util.defaultIfNull($item.source_state, {}) )
+          $util.qr( $entity.put("__typename", $item.source_type) )
+          $util.qr( $entity.put("_id", $item.source_id) )
+          $util.qr( $entity.put("_type", $item.source_type) )
+          $util.qr( $entity.put("_version", $item.event_id) )
+          $util.qr( $entity.put("_updatedAt", $util.time.epochMilliSecondsToISO8601($item.event_time)) )
+          $util.qr( $entity.put("_updatedBy", $item.event_author) )
+          $util.qr( $entity.put("_createdAt", $util.time.epochMilliSecondsToISO8601($item.source_time)) )
+          $util.qr( $entity.put("_createdBy", $item.source_owner) )
+          $util.toJson( $entity )
+        #else
+          null
+        #end
+
+  EntityVersionFn:
+    Type: AWS::AppSync::FunctionConfiguration
+    Properties:
+      ApiId: !GetAtt GraphqlApi.ApiId
+      DataSourceName: !GetAtt EventStoreDataSource.Name
+      FunctionVersion: 2018-05-29
+      Name: 'CevixeEntityVersionFn'
+      RequestMappingTemplate: |
+        #set($Integer = 0)
+        $util.qr( $util.validate( $util.isNullOrBlank($ctx.stash.type), "entity type not specified" ) )
+        $util.qr( $util.validate( $util.isNullOrBlank($ctx.stash.id), "entity id not specified" ) )
+        $util.qr( $util.validate( !($util.isNumber($ctx.stash.version) && $ctx.stash.version > 0 )), "entity version not specified" ) )
+        {
+            "version" : "2017-02-28",
+            "operation" : "GetItem",
+            "key" : {
+                "source_key": $util.dynamodb.toDynamoDBJson("/$ctx.stash.type/$ctx.stash.id")
+                "event_id" : $util.dynamodb.toDynamoDBJson($Integer.parseInt("$ctx.stash.version"))
+            }
+        }
+      ResponseMappingTemplate: |
+        #if( !$util.isNull($ctx.result) )
+          #set( $item = $ctx.result )
+          #if( !$util.isNull($item._ref) )
+            #set( $ref =  $util.parseJson($item._ref) )
+          #end
+          #set( $entity = $util.defaultIfNull($item.source_state, {}) )
+          $util.qr( $entity.put("__typename", $item.source_type) )
+          $util.qr( $entity.put("_id", $item.source_id) )
+          $util.qr( $entity.put("_type", $item.source_type) )
+          $util.qr( $entity.put("_version", $item.event_id) )
+          $util.qr( $entity.put("_updatedAt", $util.time.epochMilliSecondsToISO8601($item.event_time)) )
+          $util.qr( $entity.put("_updatedBy", $item.event_author) )
+          $util.qr( $entity.put("_createdAt", $util.time.epochMilliSecondsToISO8601($item.source_time)) )
+          $util.qr( $entity.put("_createdBy", $item.source_owner) )
+          $util.toJson( $entity )
+        #else
+          null
+        #end
+
+
+
+  EntityVersionsFn:
+    Type: AWS::AppSync::FunctionConfiguration
+    Properties:
+      ApiId: !GetAtt GraphqlApi.ApiId
+      DataSourceName: !GetAtt EventStoreDataSource.Name
+      FunctionVersion: 2018-05-29
+      Name: 'CevixeEntityVersionsFn'
+      RequestMappingTemplate: |
+        $util.qr( $util.validate( !$util.isNullOrBlank($ctx.stash.type), "entity type not specified" ) )
+        $util.qr( $util.validate( !$util.isNullOrBlank($ctx.stash.id), "entity id not specified" ) )
+        {
+            "version" : "2017-02-28",
+            "operation" : "Query",
+            "scanIndexForward" : false,
+            "query" : {
+              "expression": "source_key = :source_key",
+              "expressionValues" : {
+                ":source_key" : $util.dynamodb.toDynamoDBJson("/$ctx.stash.type/$ctx.stash.id")
+              }
+            },
+            "limit": $util.defaultIfNull(${ctx.stash.limit}, 20),
+            "nextToken": $util.toJson($util.defaultIfNullOrBlank($ctx.stash.nextToken, null))
+        }
+      ResponseMappingTemplate: |
+        #set( $result = [] )
+        #foreach( $item in $context.result.items  )
+          $util.qr($result.add({
+            "time": $util.time.epochMilliSecondsToISO8601($item.event_time),
+            "author": $item.event_author,
+            "version": $item.event_id
+          }))
+        #end
+        {
+          "items": $util.toJson($result),
+          "nextToken": $util.toJson($util.defaultIfNullOrBlank($context.result.nextToken, null))
+        }
+
+  TransactionMessagesFn:
+    Type: AWS::AppSync::FunctionConfiguration
+    Properties:
+      ApiId: !GetAtt GraphqlApi.ApiId
+      DataSourceName: !GetAtt EventStoreDataSource.Name
+      FunctionVersion: 2018-05-29
+      Name: 'CevixeTransactionMessagesFn'
+      RequestMappingTemplate: |
+        $util.qr( $util.validate( !$util.isNullOrBlank($ctx.stash.transaction), "transaction not specified" ) )
+        {
+            "version" : "2017-02-28",
+            "operation" : "Query",
+            "index" : "transaction-time-index",
+            "scanIndexForward" : true,
+            "query" : {
+              "expression": "transaction = :transaction",
+              "expressionValues" : {
+                ":transaction" : $util.dynamodb.toDynamoDBJson("$ctx.stash.transaction")
+              }
+            },
+            "limit": $util.defaultIfNull(${ctx.stash.limit}, 20),
+            "nextToken": $util.toJson($util.defaultIfNullOrBlank($ctx.stash.nextToken, null))
+        }
+      ResponseMappingTemplate: |
+        #set( $result = [] )
+        #foreach( $item in $context.result.items  )
+          #if( !$util.isNull($item._ref) )
+            #set( $ref =  $util.parseJson($item._ref) )
+          #end
+          #set( $event = $util.defaultIfNull($item.event_payload, {}) )
+          $util.qr( $event.put("__typename", $item.event_type) )
+          $util.qr( $event.put("_id", $item.event_id) )
+          $util.qr( $event.put("_type", $item.event_type) )
+          $util.qr( $event.put("_time", $util.time.epochMilliSecondsToISO8601($item.event_time)) )
+          $util.qr( $event.put("_author", $item.event_author) )
+          $util.qr( $event.put("_sourceId", $item.source_id) )
+          $util.qr( $event.put("_sourceType", $item.source_type) )
+          $util.qr( $event.put("_sourceVersion", $item.event_id) )
+          $util.qr( $event.put("_transaction", $item.transaction) )
+          #set( $entity = $util.defaultIfNull($item.source_state, {}) )
+          $util.qr( $entity.put("__typename", $item.source_type) )
+          $util.qr( $entity.put("_id", $item.source_id) )
+          $util.qr( $entity.put("_type", $item.source_type) )
+          $util.qr( $entity.put("_version", $item.event_id) )
+          $util.qr( $entity.put("_updatedAt", $util.time.epochMilliSecondsToISO8601($item.event_time)) )
+          $util.qr( $entity.put("_updatedBy", $item.event_author) )
+          $util.qr( $entity.put("_createdAt", $util.time.epochMilliSecondsToISO8601($item.source_time)) )
+          $util.qr( $entity.put("_createdBy", $item.source_owner) )
+          $util.qr($result.add({
+            "transaction": $item.transaction,
+            "eventType": $item.event_type,
+            "eventAuthor": $item.event_author,
+            "entityId": $item.source_id,
+            "entityType": $item.source_type,
+            "entityOwner": $item.source_owner,
+            "event": $event,
+            "entity": $entity,
+            "_ref": $ref
+          }))
+        #end
+        {
+          "items": $util.toJson($result),
+          "nextToken": $util.toJson($util.defaultIfNullOrBlank($context.result.nextToken, null))
+        }
+Outputs:
+  GraphqlApiArn:
+    Value: !GetAtt GraphqlApi.Arn
+    Export:
+      Name: !Join ['-', [!Ref ApplicationName, 'GraphqlApiArn']]
+  GraphqlApiId:
+    Value: !GetAtt GraphqlApi.ApiId
+    Export:
+      Name: !Join ['-', [!Ref ApplicationName, 'GraphqlApiId']]
+  GraphqlApiUrl:
+    Value: !GetAtt GraphqlApi.GraphQLUrl
+    Export:
+      Name: !Join ['-', [!Ref ApplicationName, 'GraphqlApiUrl']]
+
+  GraphqlApiCommandFnId:
+    Value: !GetAtt CommandFn.FunctionId
+    Export:
+      Name: !Join ['-', [!Ref ApplicationName, 'GraphqlApiCommandFnId']]
+  GraphqlApiPublishMessageFnId:
+    Value: !GetAtt PublishMessageFn.FunctionId
+    Export:
+      Name: !Join ['-', [!Ref ApplicationName, 'GraphqlApiPublishMessageFnId']]
+  GraphqlApiMessageFnId:
+    Value: !GetAtt MessageFn.FunctionId
+    Export:
+      Name: !Join ['-', [!Ref ApplicationName, 'GraphqlApiMessageFnId']]
+  GraphqlApiMessageEntityFnId:
+    Value: !GetAtt MessageFn.FunctionId
+    Export:
+      Name: !Join ['-', [!Ref ApplicationName, 'GraphqlApiMessageEntityFnId']]
+  GraphqlApiMessageEventFnId:
+    Value: !GetAtt MessageFn.FunctionId
+    Export:
+      Name: !Join ['-', [!Ref ApplicationName, 'GraphqlApiMessageEventFnId']]
+
+  GraphqlApiEntityMessagesFnId:
+    Value: !GetAtt EntityMessagesFn.FunctionId
+    Export:
+      Name: !Join ['-', [!Ref ApplicationName, 'GraphqlApiEntityMessagesFnId']]
+  GraphqlApiEntitiesFnId:
+    Value: !GetAtt EntitiesFn.FunctionId
+    Export:
+      Name: !Join ['-', [!Ref ApplicationName, 'GraphqlApiEntitiesFnId']]
+  GraphqlApiEntityFnId:
+    Value: !GetAtt EntityFn.FunctionId
+    Export:
+      Name: !Join ['-', [!Ref ApplicationName, 'GraphqlApiEntityFnId']]
+  GraphqlApiEntityVersionFnId:
+    Value: !GetAtt EntityVersionFn.FunctionId
+    Export:
+      Name: !Join ['-', [!Ref ApplicationName, 'GraphqlApiEntityVersionFnId']]
+  GraphqlApiEntityVersionsFnId:
+    Value: !GetAtt EntityVersionsFn.FunctionId
+    Export:
+      Name: !Join ['-', [!Ref ApplicationName, 'GraphqlApiEntityVersionsFnId']]
+
+  GraphqlApiTransactionMessagesFnId:
+    Value: !GetAtt TransactionMessagesFn.FunctionId
+    Export:
+      Name: !Join ['-', [!Ref ApplicationName, 'GraphqlApiTransactionMessagesFnId']]

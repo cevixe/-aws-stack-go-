@@ -1,0 +1,156 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Description: Cevixe Stack - Core
+
+Globals:
+  Function:
+    Runtime: go1.x
+    Timeout: 5
+    Handler: handler
+    MemorySize: 128
+    Environment:
+      Variables:
+        CVX_GRAPHQL_API_URL:
+          Fn::ImportValue:
+            Fn::Join:
+              - "-"
+              - - !Ref ApplicationName
+                - 'GraphqlApiUrl'
+        CVX_EVENT_BUS_ARN:
+          Fn::ImportValue:
+            Fn::Join:
+              - "-"
+              - - !Ref ApplicationName
+                - 'EventBusArn'
+        CVX_EVENT_STORE_NAME:
+          Fn::ImportValue:
+            Fn::Join:
+              - "-"
+              - - !Ref ApplicationName
+                - 'EventStoreName'
+        CVX_STATE_STORE_NAME:
+          Fn::ImportValue:
+            Fn::Join:
+              - "-"
+              - - !Ref ApplicationName
+                - 'StateStoreName'
+        CVX_OBJECT_STORE_NAME:
+          Fn::ImportValue:
+            Fn::Join:
+              - "-"
+              - - !Ref ApplicationName
+                - 'ObjectStoreName'
+
+Parameters:
+  ApplicationName:
+    Type: String
+    MaxLength: 120
+    Description: cevixe application name
+
+Resources:
+  NotifyEventHandlerFn:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      Policies:
+        - AWSLambdaDynamoDBExecutionRole
+        - S3ReadPolicy:
+            BucketName:
+              Fn::ImportValue:
+                Fn::Join:
+                  - "-"
+                  - - !Ref ApplicationName
+                    - 'ObjectStoreName'
+        - SNSPublishMessagePolicy:
+            TopicName:
+              Fn::ImportValue:
+                Fn::Join:
+                  - "-"
+                  - - !Ref ApplicationName
+                    - 'EventBusName'
+      Events:
+        Stream:
+          Type: DynamoDB
+          Properties:
+            Stream:
+              Fn::ImportValue:
+                Fn::Join:
+                  - "-"
+                  - - !Ref ApplicationName
+                    - 'EventStoreStream'
+            BatchSize: 1
+            StartingPosition: TRIM_HORIZON
+  NotifyGraphqlApiFn:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      Policies:
+        - AWSLambdaDynamoDBExecutionRole
+        - S3ReadPolicy:
+            BucketName:
+              Fn::ImportValue:
+                Fn::Join:
+                  - "-"
+                  - - !Ref ApplicationName
+                    - 'ObjectStoreName'
+        - Statement:
+            - Sid: AppSyncLambdaClientPolicy
+              Effect: Allow
+              Action:
+                - appsync:GraphQL
+              Resource:
+                - Fn::Join:
+                    - "/"
+                    - - Fn::ImportValue:
+                          Fn::Join:
+                            - "-"
+                            - - !Ref ApplicationName
+                              - 'GraphqlApiArn'
+                      - '*'
+      Events:
+        Stream:
+          Type: DynamoDB
+          Properties:
+            Stream:
+              Fn::ImportValue:
+                Fn::Join:
+                  - "-"
+                  - - !Ref ApplicationName
+                    - 'EventStoreStream'
+            BatchSize: 25
+            StartingPosition: TRIM_HORIZON
+  UpdateStateStoreFn:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      Policies:
+        - AWSLambdaDynamoDBExecutionRole
+        - S3ReadPolicy:
+            BucketName:
+              Fn::ImportValue:
+                Fn::Join:
+                  - "-"
+                  - - !Ref ApplicationName
+                    - 'ObjectStoreName'
+        - DynamoDBWritePolicy:
+            TableName:
+              Fn::ImportValue:
+                Fn::Join:
+                  - "-"
+                  - - !Ref ApplicationName
+                    - 'StateStoreName'
+      Events:
+        Stream:
+          Type: DynamoDB
+          Properties:
+            Stream:
+              Fn::ImportValue:
+                Fn::Join:
+                  - "-"
+                  - - !Ref ApplicationName
+                    - 'EventStoreStream'
+            BatchSize: 25
+            StartingPosition: TRIM_HORIZON

@@ -1,0 +1,28 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: AWS::Serverless-2016-10-31
+Description: Cevixe Stack
+
+Resources:
+  StoreModule:
+    Type: AWS::Serverless::Application
+    Properties:
+      Parameters:
+        ApplicationName: !Ref "AWS::StackName"
+      Location: .aws-sam/build/store/template.yaml
+  ApiModule:
+    DependsOn:
+      - StoreModule
+    Type: AWS::Serverless::Application
+    Properties:
+      Parameters:
+        ApplicationName: !Ref "AWS::StackName"
+      Location: .aws-sam/build/api/template.yaml
+  CoreModule:
+    DependsOn:
+      - StoreModule
+      - ApiModule
+    Type: AWS::Serverless::Application
+    Properties:
+      Parameters:
+        ApplicationName: !Ref "AWS::StackName"
+      Location: .aws-sam/build/core/template.yaml
