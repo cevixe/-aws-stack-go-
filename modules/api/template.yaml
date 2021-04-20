@@ -161,8 +161,11 @@ Resources:
       FunctionVersion: 2018-05-29
       Name: 'CevixeCommandFn'
       RequestMappingTemplate: |
-        $util.qr( $util.validate( !$util.isNullOrBlank($ctx.stash.type), "command type not specified" ) )
-        $util.qr( $util.validate( (!$util.isNull($ctx.stash.payload) || !$util.isNull($ctx.stash.ref)), "command payload or ref not specified" ) )
+        #set( $validCommandType = !$util.isNullOrBlank($ctx.stash.type) )
+        #set( $validCommandPayload = !$util.isNull($ctx.stash.payload) || !$util.isNull($ctx.stash.ref) )
+
+        $util.qr( $util.validate( $validCommandType , "command type not specified" ) )
+        $util.qr( $util.validate( $validCommandPayload , "command payload or ref not specified" ) )
 
         #set( $sourceId = $util.autoId() )
         #set( $sourceType = $ctx.stash.type )
@@ -236,10 +239,14 @@ Resources:
       FunctionVersion: 2018-05-29
       Name: 'CevixeMessageFn'
       RequestMappingTemplate: |
+        #set( $validEntityType = !$util.isNullOrBlank($ctx.stash.entityType) )
+        #set( $validEntityId = !$util.isNullOrBlank($ctx.stash.entityId) )
+        #set( $validEventId = $util.isNumber($ctx.stash.eventId) && $ctx.stash.eventId > 0 )
+
+        $util.qr( $util.validate( $validEntityType, "entity type not specified" ) )
+        $util.qr( $util.validate( $validEntityId, "entity id not specified" ) )
+        $util.qr( $util.validate( $validEventId, "event id not specified" ) )
         #set($Integer = 0)
-        $util.qr( $util.validate( !$util.isNullOrBlank($ctx.stash.entityType), "entity type not specified" ) )
-        $util.qr( $util.validate( !$util.isNullOrBlank($ctx.stash.entityId), "entity id not specified" ) )
-        $util.qr( $util.validate( $util.isNumber($ctx.stash.eventId), "event id not specified" ) )
         {
             "version" : "2017-02-28",
             "operation" : "GetItem",
@@ -323,8 +330,11 @@ Resources:
       FunctionVersion: 2018-05-29
       Name: 'CevixeEntityMessagesFn'
       RequestMappingTemplate: |
-        $util.qr( $util.validate( !$util.isNullOrBlank($ctx.stash.type), "entity type not specified" ) )
-        $util.qr( $util.validate( !$util.isNullOrBlank($ctx.stash.id), "entity id not specified" ) )
+        #set( $validType =  !$util.isNullOrBlank($ctx.stash.type) )
+        #set( $validId = !$util.isNullOrBlank($ctx.stash.id) )
+
+        $util.qr( $util.validate( $validType, "entity type not specified" ) )
+        $util.qr( $util.validate( $validId, "entity id not specified" ) )
         {
             "version" : "2017-02-28",
             "operation" : "Query",
@@ -387,7 +397,9 @@ Resources:
       FunctionVersion: 2018-05-29
       Name: 'CevixeEntitiesFn'
       RequestMappingTemplate: |
-        $util.qr( $util.validate( $util.isNullOrBlank($ctx.stash.type), "entity type not specified" ) )
+        #set( $validType = !$util.isNullOrBlank($ctx.stash.type) )
+
+        $util.qr( $util.validate( $validType, "entity type not specified" ) )
         {
           "version" : "2017-02-28",
           "operation" : "Query",
@@ -430,8 +442,11 @@ Resources:
       FunctionVersion: 2018-05-29
       Name: 'CevixeEntityFn'
       RequestMappingTemplate: |
-        $util.qr( $util.validate( $util.isNullOrBlank($ctx.stash.type), "entity type not specified" ) )
-        $util.qr( $util.validate( $util.isNullOrBlank($ctx.stash.id), "entity id not specified" ) )
+        #set( $validType = !$util.isNullOrBlank($ctx.stash.type) )
+        #set( $validId = !$util.isNullOrBlank($ctx.stash.id) )
+
+        $util.qr( $util.validate( $validType, "entity type not specified" ) )
+        $util.qr( $util.validate( $validId, "entity id not specified" ) )
         {
           "version" : "2017-02-28",
           "operation" : "Query",
@@ -472,10 +487,14 @@ Resources:
       FunctionVersion: 2018-05-29
       Name: 'CevixeEntityVersionFn'
       RequestMappingTemplate: |
+        #set( $validType = !$util.isNullOrBlank($ctx.stash.type) )
+        #set( $validId = !$util.isNullOrBlank($ctx.stash.id) )
+        #set( $validVersion = $util.isNumber($ctx.stash.version) && $ctx.stash.version > 0 )
+
         #set($Integer = 0)
-        $util.qr( $util.validate( $util.isNullOrBlank($ctx.stash.type), "entity type not specified" ) )
-        $util.qr( $util.validate( $util.isNullOrBlank($ctx.stash.id), "entity id not specified" ) )
-        $util.qr( $util.validate( !($util.isNumber($ctx.stash.version) && $ctx.stash.version > 0 )), "entity version not specified" ) )
+        $util.qr( $util.validate( $validType, "entity type not specified" ) )
+        $util.qr( $util.validate( $validId, "entity id not specified" ) )
+        $util.qr( $util.validate( $validVersion, "entity version not specified" ) )
         {
             "version" : "2017-02-28",
             "operation" : "GetItem",
@@ -514,8 +533,11 @@ Resources:
       FunctionVersion: 2018-05-29
       Name: 'CevixeEntityVersionsFn'
       RequestMappingTemplate: |
-        $util.qr( $util.validate( !$util.isNullOrBlank($ctx.stash.type), "entity type not specified" ) )
-        $util.qr( $util.validate( !$util.isNullOrBlank($ctx.stash.id), "entity id not specified" ) )
+        #set( $validType = !$util.isNullOrBlank($ctx.stash.type) )
+        #set( $validId = !$util.isNullOrBlank($ctx.stash.id) )
+
+        $util.qr( $util.validate( $validType, "entity type not specified" ) )
+        $util.qr( $util.validate( $validId, "entity id not specified" ) )
         {
             "version" : "2017-02-28",
             "operation" : "Query",
@@ -551,7 +573,9 @@ Resources:
       FunctionVersion: 2018-05-29
       Name: 'CevixeTransactionMessagesFn'
       RequestMappingTemplate: |
-        $util.qr( $util.validate( !$util.isNullOrBlank($ctx.stash.transaction), "transaction not specified" ) )
+        #set( $validTransaction = !$util.isNullOrBlank($ctx.stash.transaction) )
+
+        $util.qr( $util.validate( $validTransaction, "transaction not specified" ) )
         {
             "version" : "2017-02-28",
             "operation" : "Query",
