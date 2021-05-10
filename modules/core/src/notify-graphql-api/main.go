@@ -5,111 +5,152 @@ import (
 	"fmt"
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/cevixe/aws-sdk-go/aws/integration/dynamo"
+	"github.com/cevixe/aws-sdk-go/aws/impl"
+	"github.com/cevixe/aws-sdk-go/aws/integration/sqs"
 	"github.com/cevixe/aws-sdk-go/aws/model"
-	"github.com/cevixe/aws-sdk-go/runtime"
-	"github.com/cevixe/aws-sdk-go/util"
+	"github.com/cevixe/aws-sdk-go/aws/runtime"
+	"github.com/cevixe/aws-sdk-go/aws/util"
 	"github.com/cevixe/core-sdk-go/core"
+	"reflect"
 	"sync"
 )
 
 const gqlQuery string = `
 mutation(
-	$Transaction: ID!
-	$SourceId: ID!
-	$SourceType: String!
-	$SourceOwner: String!
-	$EventAuthor: String!
-	$EventType: String!
-	$EventObject: AWSJSON!
+	$Input: AWSJSON!
 ) {
-	publishEvent(
-		transaction: $Transaction
-		sourceId: $SourceId
-		sourceType: $SourceType
-		sourceOwner: $SourceOwner
-		eventAuthor: $EventAuthor
-		eventType: $EventType
-		eventObject: $EventObject
+	publishMessage(
+		input: $Input
 	) {
 		transaction
-		eventId
 		eventType
-		eventTime
 		eventAuthor
-		eventPayload
-		sourceId
-		sourceType
-		sourceTime
-		sourceOwner
-		sourceState
+		eventJson
+        event {
+          ...fullEvent
+        }
+		entityId
+		entityType
+		entityOwner
+		entityJson
+        entity {
+          ...fullEntity
+        }
 	}
 }
 `
 
-func generateRequest(event core.Event) *model.GraphqlRequest {
+const eventStandardFields = `
+	__typename
+	_id
+	_type
+	_time
+	_author
+	_sourceId
+	_sourceType
+	_sourceVersion
+	_transaction
+`
 
-	payload := &map[string]interface{}{}
-	event.Payload(payload)
+const entityStandardFields = `
+	__typename
+    _id
+    _type
+    _version
+    _createdAt
+    _createdBy
+    _updatedAt
+    _updatedBy
+`
 
-	state := &map[string]interface{}{}
-	event.Source().State(state)
+func objectGqlFields(obj interface{}) string {
+	var gql string
+	objMap := obj.(*map[string]interface{})
+	for key, value := range *objMap {
+		if reflect.ValueOf(value).Kind() == reflect.Map {
+			gql = gql + key + " {\n" + objectGqlFields(value) + "}\n"
+		} else {
+			gql = gql + key + "\n"
+		}
+	}
+	return gql
+}
 
-	return &model.GraphqlRequest{
-		Query: gqlQuery,
+func generateEventFragment(typ string, object interface{}) string {
+	return "fragment fullEvent on Event {\n" +
+		"...on " + typ + " {\n" +
+		eventStandardFields +
+		objectGqlFields(object) +
+		"}\n" +
+		"}\n"
+}
+
+func generateEntityFragment(typ string, object interface{}) string {
+	return "fragment fullEntity on Entity {\n" +
+		"...on " + typ + " {\n" +
+		entityStandardFields +
+		objectGqlFields(object) +
+		"}\n" +
+		"}\n"
+}
+
+func generateRequest(ctx context.Context, event *model.AwsEventRecord) *model.AwsGraphqlRequest {
+
+	awsContext := ctx.Value(impl.AwsContext).(*impl.Context)
+	if event.Reference != nil && event.EventData == nil {
+		awsContext.AwsObjectStore.GetObject(ctx, event.Reference, event)
+	}
+
+	eventFragment := generateEventFragment(*event.EventType, event.EventData)
+	entityFragment := generateEntityFragment(*event.EntityType, event.EventData)
+	fullGqlQuery := gqlQuery + "\n" + eventFragment + "\n" + entityFragment
+
+	return &model.AwsGraphqlRequest{
+		Query: fullGqlQuery,
 		Variables: map[string]interface{}{
-			"Transaction": event.Transaction(),
-			"SourceId":    event.Source().ID(),
-			"SourceType":  event.Source().Type(),
-			"SourceOwner": event.Source().Owner(),
-			"EventAuthor": event.Author(),
-			"EventType":   event.Type(),
-			"EventObject": util.MarshalJsonString(map[string]interface{}{
-				"transaction":  event.Transaction(),
-				"eventId":      event.ID(),
-				"eventType":    event.Type(),
-				"eventTime":    event.Time(),
-				"eventAuthor":  event.Author(),
-				"eventPayload": payload,
-				"sourceId":     event.Source().ID(),
-				"sourceType":   event.Source().Type(),
-				"sourceTime":   event.Source().Time(),
-				"sourceOwner":  event.Source().Owner(),
-				"sourceState":  state,
+			"Input": util.MarshalJsonString(map[string]interface{}{
+				"transaction": event.Transaction,
+				"eventType":   event.EventType,
+				"eventAuthor": event.EventAuthor,
+				"eventJson":   event.EventData,
+				"entityId":    event.EntityID,
+				"entityType":  event.EntityType,
+				"entityOwner": event.EntityCreatedBy,
+				"entityJson":  event.EntityState,
 			}),
 		},
 	}
 }
 
-func handler(ctx context.Context, input events.DynamoDBEvent) error {
+func handler(ctx context.Context, input events.SQSEvent) error {
 
-	cevixeEvents := make([]core.Event, 0, len(input.Records))
-	for _, item := range input.Records {
-		cevixeEvent := dynamo.MapDynamoEventRecordToCevixeEvent(ctx, item)
-		cevixeEvents = append(cevixeEvents, cevixeEvent)
-	}
+	eventRecords := make([]*model.AwsEventRecord, 0, len(input.Records))
+	sqs.UnmarshallSQSEvent(input, &eventRecords)
 
 	wg := &sync.WaitGroup{}
-	wg.Add(len(cevixeEvents))
-	for _, item := range cevixeEvents {
+	wg.Add(len(eventRecords))
+	for _, item := range eventRecords {
 		go asyncGraphqlCall(ctx, item, wg)
 	}
 	wg.Wait()
 	return nil
 }
 
-func asyncGraphqlCall(ctx context.Context, event core.Event, wg *sync.WaitGroup) {
-	request := generateRequest(event)
-	awsContext := ctx.Value(model.AwsContext).(*model.Context)
-	response, err := awsContext.AwsGraphGateway.ExecuteGraphql(ctx, request)
-	if err != nil {
-		panic(err)
+func asyncGraphqlCall(ctx context.Context, event *model.AwsEventRecord, wg *sync.WaitGroup) {
+
+	if *event.EventClass != string(core.DomainEvent) {
+		wg.Done()
+		return
+	} else {
+		request := generateRequest(ctx, event)
+		fmt.Println("request:\n" + util.MarshalJsonString(request))
+		//awsContext := ctx.Value(impl.AwsContext).(*impl.Context)
+		//response := awsContext.AwsGraphqlGateway.ExecuteGraphql(ctx, request)
+		//if len(response.Errors) > 0 {
+		//	panic(fmt.Errorf("invalid gql request:\n%v", response.Errors))
+		//}
+		wg.Done()
 	}
-	fmt.Printf("response: \n%s", util.MarshalJsonString(response))
-	if len(response.Errors) > 0 {
-		panic(fmt.Errorf("invalid gql request:\n%v", response.Errors))
-	}
-	wg.Done()
 }
 
 func main() {

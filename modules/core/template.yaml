@@ -10,12 +10,12 @@ Globals:
     MemorySize: 128
     Environment:
       Variables:
-        CVX_GRAPHQL_API_URL:
+        CVX_GRAPHQL_GATEWAY_URL:
           Fn::ImportValue:
             Fn::Join:
               - "-"
               - - !Ref ApplicationName
-                - 'GraphqlApiUrl'
+                - 'GraphqlGatewayUrl'
         CVX_EVENT_BUS_ARN:
           Fn::ImportValue:
             Fn::Join:
@@ -28,6 +28,12 @@ Globals:
               - "-"
               - - !Ref ApplicationName
                 - 'EventStoreName'
+        CVX_CONTROL_STORE_NAME:
+          Fn::ImportValue:
+            Fn::Join:
+              - "-"
+              - - !Ref ApplicationName
+                - 'ControlStoreName'
         CVX_STATE_STORE_NAME:
           Fn::ImportValue:
             Fn::Join:
@@ -48,6 +54,8 @@ Parameters:
     Description: cevixe application name
 
 Resources:
+  DomainEventQueueFnQueue:
+    Type: AWS::SQS::Queue
   NotifyEventHandlerFn:
     Type: AWS::Serverless::Function
     Metadata:
@@ -68,7 +76,7 @@ Resources:
                 Fn::Join:
                   - "-"
                   - - !Ref ApplicationName
-                    - 'EventBusName'
+                    - 'EventBusTopicName'
       Events:
         Stream:
           Type: DynamoDB
@@ -78,8 +86,8 @@ Resources:
                 Fn::Join:
                   - "-"
                   - - !Ref ApplicationName
-                    - 'EventStoreStream'
-            BatchSize: 1
+                    - 'EventStoreStreamArn'
+            BatchSize: 25
             StartingPosition: TRIM_HORIZON
   NotifyGraphqlApiFn:
     Type: AWS::Serverless::Function
@@ -107,20 +115,25 @@ Resources:
                           Fn::Join:
                             - "-"
                             - - !Ref ApplicationName
-                              - 'GraphqlApiArn'
+                              - 'GraphqlGatewayArn'
                       - '*'
       Events:
-        Stream:
-          Type: DynamoDB
+        DomainEvent:
+          Type: SNS
           Properties:
-            Stream:
+            Topic:
               Fn::ImportValue:
                 Fn::Join:
                   - "-"
                   - - !Ref ApplicationName
-                    - 'EventStoreStream'
-            BatchSize: 25
-            StartingPosition: TRIM_HORIZON
+                    - 'EventBusArn'
+            SqsSubscription:
+              BatchSize: 10
+              QueueArn: !GetAtt DomainEventQueueFnQueue.Arn
+              QueueUrl: !Ref DomainEventQueueFnQueue
+              FilterPolicy:
+                event_class:
+                  - D
   UpdateStateStoreFn:
     Type: AWS::Serverless::Function
     Metadata:
@@ -151,6 +164,6 @@ Resources:
                 Fn::Join:
                   - "-"
                   - - !Ref ApplicationName
-                    - 'EventStoreStream'
+                    - 'EventStoreStreamArn'
             BatchSize: 25
             StartingPosition: TRIM_HORIZON

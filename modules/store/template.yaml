@@ -18,16 +18,16 @@ Resources:
     Properties:
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - AttributeName: source_key
+        - AttributeName: event_source
           AttributeType: S
         - AttributeName: event_id
-          AttributeType: N
+          AttributeType: S
         - AttributeName: transaction
           AttributeType: S
         - AttributeName: event_time
           AttributeType: N
       KeySchema:
-        - AttributeName: source_key
+        - AttributeName: event_source
           KeyType: HASH
         - AttributeName: event_id
           KeyType: RANGE
@@ -42,6 +42,20 @@ Resources:
               KeyType: HASH
             - AttributeName: event_time
               KeyType: RANGE
+  ControlStore:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: control_group
+          AttributeType: S
+        - AttributeName: control_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: control_group
+          KeyType: HASH
+        - AttributeName: control_id
+          KeyType: RANGE
   StateStore:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -61,76 +75,48 @@ Outputs:
   EventBusArn:
     Value: !Ref EventBus
     Export:
-      Name:
-        Fn::Join:
-          - "-"
-          - - !Ref ApplicationName
-            - 'EventBusArn'
-  EventBusName:
+      Name: !Join [ "-",[ !Ref ApplicationName,'EventBusArn' ] ]
+  EventBusTopicName:
     Value: !GetAtt EventBus.TopicName
     Export:
-      Name:
-        Fn::Join:
-          - "-"
-          - - !Ref ApplicationName
-            - 'EventBusName'
+      Name: !Join [ "-",[ !Ref ApplicationName,'EventBusTopicName' ] ]
 
   ObjectStoreArn:
     Value: !GetAtt ObjectStore.Arn
     Export:
-      Name:
-        Fn::Join:
-          - "-"
-          - - !Ref ApplicationName
-            - 'ObjectStoreArn'
+      Name: !Join [ "-",[ !Ref ApplicationName,'ObjectStoreArn' ] ]
   ObjectStoreName:
     Value: !Ref ObjectStore
     Export:
-      Name:
-        Fn::Join:
-          - "-"
-          - - !Ref ApplicationName
-            - 'ObjectStoreName'
+      Name: !Join [ "-",[ !Ref ApplicationName,'ObjectStoreName' ] ]
 
   EventStoreArn:
     Value: !GetAtt EventStore.Arn
     Export:
-      Name:
-        Fn::Join:
-          - "-"
-          - - !Ref ApplicationName
-            - 'EventStoreArn'
+      Name: !Join [ "-",[ !Ref ApplicationName,'EventStoreArn' ] ]
   EventStoreName:
     Value: !Ref EventStore
     Export:
-      Name:
-        Fn::Join:
-          - "-"
-          - - !Ref ApplicationName
-            - 'EventStoreName'
-  EventStoreStream:
+      Name: !Join [ "-",[ !Ref ApplicationName,'EventStoreName' ] ]
+  EventStoreStreamArn:
     Value: !GetAtt EventStore.StreamArn
     Export:
-      Name:
-        Fn::Join:
-          - "-"
-          - - !Ref ApplicationName
-            - 'EventStoreStream'
+      Name: !Join [ "-",[ !Ref ApplicationName,'EventStoreStreamArn' ] ]
+
+  ControlStoreArn:
+    Value: !GetAtt ControlStore.Arn
+    Export:
+      Name: !Join [ "-",[ !Ref ApplicationName,'ControlStoreArn' ] ]
+  ControlStoreName:
+    Value: !Ref ControlStore
+    Export:
+      Name: !Join [ "-",[ !Ref ApplicationName,'ControlStoreName' ] ]
 
   StateStoreArn:
     Value: !GetAtt StateStore.Arn
     Export:
-      Name:
-        Fn::Join:
-          - "-"
-          - - !Ref ApplicationName
-            - 'StateStoreArn'
+      Name: !Join [ "-",[ !Ref ApplicationName,'StateStoreArn' ] ]
   StateStoreName:
     Value: !Ref StateStore
     Export:
-      Name:
-        Fn::Join:
-          - "-"
-          - - !Ref ApplicationName
-            - 'StateStoreName'
-
+      Name: !Join [ "-",[ !Ref ApplicationName,'StateStoreName' ] ]
